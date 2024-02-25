@@ -1,0 +1,13 @@
+name: tcr
+version: 0.1.0
+
+authors:
+  - hissssst <csqcsqcsq@yandex.ru>
+
+targets:
+  tcr:
+    main: src/tcr.cr
+
+crystal: 1.9.2
+
+license: MIT
