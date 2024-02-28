@@ -44,7 +44,6 @@ lib LibFSWatch
     extended : Bool
   end
 
-  fun fsw_init_library : LibC::Int
   fun fsw_init_library : FSW_STATUS
   fun fsw_init_session(LibC::Int) : FSW_HANDLE
   fun fsw_add_path(FSW_HANDLE, path : LibC::Char*) : FSW_STATUS
@@ -113,6 +112,7 @@ class FSWatch
     if LibFSWatch.fsw_init_library != 0
       raise "FSWatch init failed"
     end
+    LibFSWatch.fsw_set_verbose(false)
     @session = LibFSWatch.fsw_init_session(0)
   end
 

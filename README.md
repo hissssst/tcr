@@ -2,4 +2,17 @@
 
 TUI file manager with tree abstraction written in Crystal.
 
-You can use it, it supports basic movement, and you can configure the action which will be executed on `enter` key.
+## Configuration
+
+### Bindings
+
+Currently `tcr` supports only bindings configuration. You can write any shellscript in configuration.
+`$tcr_path` variable is available to execute some action on the currently selected path
+
+Example:
+
+```ini
+[bindings]
+enter = kcr edit $tcr_path
+i = kcr open $tcr_path
+```

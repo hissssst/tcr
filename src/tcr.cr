@@ -7,11 +7,6 @@ require "./fswatch"
 require "./message_box"
 require "./config"
 
-lib LibC
-  LC_ALL = 6
-  fun setlocale(category : LibC::Int, locale : Pointer(LibC::Char)) : Pointer(LibC::Char)
-end
-
 class FileTree
   getter path : Path
   getter children : Array(FileTree)
@@ -154,20 +149,25 @@ class View
 
   getter tree : FileTree
   getter lines : Array(Line)
-  getter ymax
-  getter xmax
+  getter ymax : Int32
+  getter xmax : Int32
   getter yoffset
   getter xoffset
   getter cursor
 
   def initialize(tree : FileTree)
+    Curses.init
+    Curses.erase
+    x = Curses.xmax
+    y = Curses.ymax
+
     @tree = tree
     @lines = [] of Line
     @cursor = 0
-    @ymax = 0
-    @xmax = 0
     @yoffset = 0
     @xoffset = 0
+    @xmax = x
+    @ymax = y - 1
   end
 
   def resize(x, y)
@@ -375,7 +375,7 @@ module Tree
 
   @@readline_result = nil
 
-  def ask(view, prompt)
+  def ask(hook)
     Curses.curs_set(Curses::Cursor::Invisible)
     callback =
       ->(s : Pointer(LibC::Char)) {
@@ -384,9 +384,6 @@ module Tree
 
     Readline.init(prompt, ->(void : Void) {}, callback)
     while true
-      view.render
-      Curses.erase
-      view.draw
       char = LibNcurses.wgetch(LibNcurses.stdscr)
       case char
       when LibNcurses::Keys::KEY_RESIZE.value.chr
@@ -413,7 +410,16 @@ module Tree
     result
   end
 
-  def ui(dir : Path)
+  def start(dir, log_to, path_to_select)
+    tree = FileTree.new Path.new dir
+    view = View.new(tree)
+    fswatch_mbox = start_fswatch()
+    config = Config.new
+
+    loop(config, tree, view, fswatch_mbox)
+  end
+
+  private def start_fswatch
     fswatch_mbox = MessageBox(FSWatch::Event).new
     spawn same_thread: false do
       fswatch = FSWatch.new
@@ -430,19 +436,11 @@ module Tree
       fswatch.start_monitor
     end
 
-    LibC.setlocale(LibC::LC_ALL, "".dup.to_unsafe)
+    return fswatch_mbox
+  end
 
-    tree = FileTree.new(dir)
-    view = View.new(tree)
-    Curses.init
-
-    Curses.erase
-    x = Curses.xmax
-    y = Curses.ymax
-    view.resize(x, y)
+  private def loop(config, tree, view, fswatch_mbox)
     changed = true
-    config = Config.new
-
     while true
       if changed
         Log.info { "Changed" }
@@ -470,6 +468,9 @@ module Tree
         changed = view.up(1)
       when 'l'
         changed = view.right
+      when 'q'
+        Curses.stop
+        exit(0)
       when LibNcurses::Keys::KEY_PPAGE.value.chr
         changed = view.up(view.lines.size)
       when LibNcurses::Keys::KEY_NPAGE.value.chr
@@ -497,11 +498,12 @@ module Tree
           else
             false
           end
-        # Bindings
-      when '\r'
-        path = view.lines[view.cursor].tree.path
-        config.enter path
       else
+        if char.ord != -1
+          Log.info { "Char #{char}" }
+          path = view.lines[view.cursor].tree.path
+          config.execute(char, path)
+        end
         changed = false
       end
       changed = changed || tree.handle_changes(fswatch_mbox.take)
@@ -511,6 +513,21 @@ module Tree
   OptionParser.parse do |parser|
     Log.setup(:error)
     parser.banner = "Usage: tcr [flags] directory\n"
+
+    path_to_select = nil
+    log_to = nil
+
+    parser.on "-s", "--select", "Open and select this path" do |path|
+      path_to_select = Path.new path
+    end
+
+    parser.on "-l FILE", "--log=FILE", "Log to" do |filename|
+      log_to = Path.new filename
+      file = File.new(filename, "a+")
+      backend = Log::IOBackend.new(io: file, dispatcher: Log::SyncDispatcher.new)
+      Log.setup(:info, backend)
+      Log.info { "Logging to #{filename}" }
+    end
 
     parser.on "-v", "--version", "Show version" do
       puts "1.0"
@@ -522,13 +539,6 @@ module Tree
       exit
     end
 
-    parser.on "-l FILE", "--log=FILE", "Log to" do |filename|
-      file = File.new(filename, "a+")
-      backend = Log::IOBackend.new(io: file, dispatcher: Log::SyncDispatcher.new)
-      Log.setup(:info, backend)
-      Log.info { "Logging to #{filename}" }
-    end
-
     parser.invalid_option do |flag|
       STDERR.puts "ERROR: #{flag} is not a valid option."
       STDERR.puts parser
@@ -537,7 +547,7 @@ module Tree
 
     parser.unknown_args do |args|
       dir = args[0]? || "."
-      ui Path.new dir
+      start(dir: dir, log_to: log_to, path_to_select: path_to_select)
     end
   end
 end

@@ -1,6 +1,11 @@
 @[Extern]
 record MouseEvent, id : Int8, x : LibC::Int, y : LibC::Int, z : LibC::Int, bstate : UInt32
 
+lib LibC
+  LC_ALL = 6
+  fun setlocale(category : LibC::Int, locale : Pointer(LibC::Char)) : Pointer(LibC::Char)
+end
+
 @[Link("ncursesw")]
 lib LibNcurses
   alias Screen = Pointer(Void)
@@ -241,6 +246,8 @@ module Curses
   end
 
   def init
+    LibC.setlocale(LibC::LC_ALL, "".dup.to_unsafe)
+
     LibNcurses.initscr
     LibNcurses.timeout(100)
     LibNcurses.start_color
@@ -258,6 +265,10 @@ module Curses
     LibNcurses.nonl
     LibNcurses.wbkgd(LibNcurses.stdscr, pair(Color::Background))
     mousemask(MouseButton::ALL_MOUSE_EVENTS)
+  end
+
+  def stop
+    LibNcurses.endwin(LibNcurses.stdscr)
   end
 
   def screen

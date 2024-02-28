@@ -21,12 +21,35 @@ class Config
     path.expand(home: true)
   end
 
-  def enter(path : Path)
-    command = @bindings["enter"]? || "kcr edit $"
-    Log.info { "Command: #{command}" }
-    cmd = command.sub("$", path)
-    Log.info { "CMD #{cmd}" }
-    process = Process.new("sh", ["-c", cmd])
-    process.wait.success?
+  def execute(char, path : Path)
+    binding = char_to_bind(char)
+    if command = @bindings[binding]? || default(binding)
+      Log.info { "Executing #{command}" }
+      process = Process.new(command, shell: true, env: {"tcr_path" => path.to_s})
+      spawn same_thread: false do
+        while !process.terminated?
+          sleep(1)
+        end
+        Log.info { "Command \"#{command}\" finished with #{process.wait.exit_status}" }
+      end
+    end
+  end
+
+  def char_to_bind(char)
+    case char
+    when '\r'
+      "enter"
+    else
+      char.to_s
+    end
+  end
+
+  def default(binding)
+    case binding
+    when "enter"
+      "kcr edit $tcr_path"
+    else
+      nil
+    end
   end
 end
