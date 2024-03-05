@@ -20,7 +20,7 @@ lib LibNcurses
     KEY_RIGHT     = 0o405 # right-arrow key
     KEY_HOME      = 0o406 # home key
     KEY_BACKSPACE = 0o407 # backspace key
-    KEY_F0        = 0o410 # Function keys.  Space for 64
+    KEY_F0        = 0o410 # Function keys
     KEY_F1        = 0o411 #
     KEY_F2        = 0o412 #
     KEY_F3        = 0o413 #
@@ -141,6 +141,7 @@ lib LibNcurses
   fun COLOR_PAIR(LibC::Int) : ColorPair
   fun attron(LibC::Int)
   fun attroff(LibC::Int)
+  fun putp(Pointer(LibC::Char))
 
   fun wgetch(Screen) : Char
   fun ungetch(LibC::Int)
@@ -192,6 +193,14 @@ module Curses
     LibNcurses.mousemask(mask, nil)
   end
 
+  def putp(string)
+    LibNcurses.putp(string.dup.to_unsafe)
+  end
+
+  def set_title(title)
+    putp("\x1b]0;#{title}\x07")
+  end
+
   def getmouse
     LibNcurses.getmouse(out mouse_event)
     mouse_event
@@ -229,8 +238,7 @@ module Curses
   end
 
   def printw(string : String)
-    copy = string.dup
-    LibNcurses.printw(copy.to_unsafe)
+    LibNcurses.printw(string.dup.to_unsafe)
   end
 
   def erase
@@ -264,6 +272,7 @@ module Curses
     LibNcurses.noecho
     LibNcurses.nonl
     LibNcurses.wbkgd(LibNcurses.stdscr, pair(Color::Background))
+    set_title("tcr///")
     mousemask(MouseButton::ALL_MOUSE_EVENTS)
   end
 

@@ -36,6 +36,9 @@ module Readline
   @@input : LibC::Char
   @@input = 0.to_u8!
 
+  @@readline_result : String | Nil
+  @@readline_result = nil
+
   def init(prompt, redisplay_hook, input_hook)
     configuration = %(
       set editing-mode emacs
@@ -81,6 +84,8 @@ module Readline
     dp = LibReadline.rl_display_prompt
     if dp
       String.new(dp).dup
+    else
+      ""
     end
   end
 
@@ -88,6 +93,29 @@ module Readline
     lb = LibReadline.rl_line_buffer
     if lb
       String.new(lb).dup
+    else
+      ""
     end
+  end
+
+  def ask(prompt, hook)
+    callback =
+      ->(s : Pointer(LibC::Char)) {
+        @@readline_result = s ? String.new(s) : ""
+      }
+
+    Readline.init(prompt, ->(void : Void) {}, callback)
+    while true
+      hook.call
+
+      if @@readline_result != nil
+        Readline.deinit
+        break
+      end
+    end
+
+    result = @@readline_result || ""
+    @@readline_result = nil
+    result
   end
 end

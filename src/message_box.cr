@@ -1,5 +1,6 @@
 # Message box like in erlang
-# Sorry, I am not used to Crystal's ipc primitives and Channel was blocking
+# Sorry, I am not used to Crystal's ipc primitives
+# and I needed non-blocking receive
 
 class MessageBox(T)
   @lock = Mutex.new

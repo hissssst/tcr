@@ -1,11 +1,12 @@
-require "option_parser"
+require "file_utils"
 require "log"
+require "option_parser"
 require "system/user"
+require "./config"
 require "./curses"
-require "./readline"
 require "./fswatch"
 require "./message_box"
-require "./config"
+require "./readline"
 
 class FileTree
   getter path : Path
@@ -21,7 +22,7 @@ class FileTree
   end
 
   def initialize(path : Path)
-    @path = path.expand
+    @path = path.expand.normalize
     @children = [] of FileTree
     @expanded = false
     @kind = File.directory?(@path) ? :directory : :file
@@ -48,6 +49,18 @@ class FileTree
         end
       end
       result
+    else
+      false
+    end
+  end
+
+  def expand_path(path)
+    if path == @path || path.parents.includes?(@path)
+      self.expand
+      @children.find do |child|
+        child.expand_path(path)
+      end
+      true
     else
       false
     end
@@ -97,17 +110,13 @@ class FileTree
     end
   end
 
-  def force_expand
-    Dir.new(@path).each_child do |path|
-      path = @path / Path.new path
-      @children.push FileTree.new(self, path)
-    end
-  end
-
   def expand
     if @kind == :directory && !@expanded
       if @children.size == 0
-        self.force_expand
+        Dir.new(@path).each_child do |path|
+          path = @path / Path.new path
+          @children.push FileTree.new(self, path)
+        end
       end
 
       @expanded = true
@@ -117,10 +126,25 @@ class FileTree
     end
   end
 
+  def expand_recursive
+    changed = self.expand
+    self.children.each do |child|
+      child_changed = child.expand_recursive
+      changed = changed || child_changed
+    end
+    changed
+  end
+
   def inpand
     was = @expanded
     @expanded = false
     was
+  end
+
+  def rename(new_name)
+    new_path = Path.new(@path.dirname) / Path.new(new_name)
+    FileUtils.mv(@path, new_path)
+    @path = new_path
   end
 
   def depth_traverse(level = 0_u8, &block : UInt8, FileTree -> Symbol)
@@ -168,12 +192,60 @@ class View
     @xoffset = 0
     @xmax = x
     @ymax = y - 1
+    @mode = :normal
   end
 
   def resize(x, y)
     @xmax = x
     @ymax = y - 1
-    @cursor = Math.min(Math.min(@ymax - 1 + @yoffset, @cursor), @ymax)
+    if @cursor > @ymax - 1
+      @yoffset += @cursor - (@ymax - 1)
+      @cursor = @ymax - 1
+    end
+  end
+
+  def ask(mode, prompt)
+    @mode = mode
+    Curses.curs_set(Curses::Cursor::Visible)
+    result =
+      Readline.ask(prompt, ->{
+        Log.info { "Drawing" }
+        self.render
+        Curses.erase
+        self.draw
+        char = LibNcurses.wgetch(LibNcurses.stdscr)
+        case char
+        when LibNcurses::Keys::KEY_RESIZE.value.chr
+          x = Curses.xmax
+          y = Curses.ymax
+          self.resize(x, y)
+        when LibNcurses::Keys::KEY_BACKSPACE.value.chr
+          Readline.forward_char(127)
+        when LibNcurses::Keys::KEY_LEFT.value.chr
+          Readline.forward_char(224)
+          Readline.forward_char(75)
+        when LibNcurses::Keys::KEY_DOWN.value.chr
+          Readline.forward_char(224)
+          Readline.forward_char(80)
+        when LibNcurses::Keys::KEY_UP.value.chr
+          Readline.forward_char(224)
+          Readline.forward_char(72)
+        when LibNcurses::Keys::KEY_RIGHT.value.chr
+          Readline.forward_char(224)
+          Readline.forward_char(77)
+        when 27.chr
+          Log.info { "Escape!" }
+          Readline.forward_char(0)
+        else
+          if char.ord != -1
+            Readline.forward_char(char)
+          end
+        end
+      })
+
+    Curses.curs_set(Curses::Cursor::Invisible)
+    @mode = :normal
+    result
   end
 
   def home
@@ -281,7 +353,7 @@ class View
     steps = @ymax + @yoffset
     @tree.depth_traverse do |level, child|
       if steps == 0
-        :stop
+        :break
       elsif steps > @ymax
         steps -= 1
         :continue
@@ -295,6 +367,25 @@ class View
     if steps > 0 && @yoffset > 0
       @yoffset = Math.max(@yoffset - steps, 0)
       self.render
+    end
+  end
+
+  def select_path(path)
+    found_at = -1
+    steps = 0
+    @tree.depth_traverse do |level, child|
+      if found_at == -1 && child.path == path
+        found_at = steps
+      end
+      steps += 1
+      :continue
+    end
+
+    if found_at >= @ymax
+      @yoffset = Math.min(found_at, steps - @ymax)
+      @cursor = Math.max(0, found_at - @yoffset)
+    else
+      @cursor = found_at
     end
   end
 
@@ -330,7 +421,9 @@ class View
         end
 
       basename =
-        if line.level == 0
+        if i == @cursor && @mode == :rename
+          Readline.line_buffer.as(String)
+        elsif line.level == 0
           home = Path.home
           expanded = tree.path.expand(home: true)
           if relative = expanded.relative_to?(home)
@@ -355,9 +448,16 @@ class View
     end
 
     # Printing readline or status bar
-    control_line = "#{Readline.display_prompt}#{Readline.line_buffer}"
-    Curses.withattr(Curses.pair(Curses::Color::Command)) do
-      Curses.printw fill_trailing control_line
+    case @mode
+    when :rename
+      control_line = "#{@mode}///#{Readline.display_prompt}"
+      Curses.withattr(Curses.pair(Curses::Color::Command)) do
+        Curses.printw fill_trailing control_line
+      end
+    else
+      Curses.withattr(Curses.pair(Curses::Color::Command)) do
+        Curses.printw fill_trailing "#{@mode}"
+      end
     end
   end
 end
@@ -365,54 +465,16 @@ end
 module Tree
   extend self
 
-  def ls(directory)
-    return `ls #{directory}`[0..-2]
-  end
-
-  def ctrl(key : Char)
-    (key.ord & 0x1f).chr
-  end
-
-  @@readline_result = nil
-
-  def ask(hook)
-    Curses.curs_set(Curses::Cursor::Invisible)
-    callback =
-      ->(s : Pointer(LibC::Char)) {
-        @@readline_result = s ? String.new(s) : ""
-      }
-
-    Readline.init(prompt, ->(void : Void) {}, callback)
-    while true
-      char = LibNcurses.wgetch(LibNcurses.stdscr)
-      case char
-      when LibNcurses::Keys::KEY_RESIZE.value.chr
-        x = Curses.xmax
-        y = Curses.ymax
-        view.resize(x, y)
-      when LibNcurses::Keys::KEY_BACKSPACE.value.chr
-        Readline.forward_char(127)
-      when LibNcurses::Keys::KEY_LEFT.value.chr
-        Readline.forward_char(224)
-        Readline.forward_char(75)
-      else
-        Readline.forward_char(char)
-      end
-
-      if @@readline_result != nil
-        Readline.deinit
-        break
-      end
-    end
-
-    result = @@readline_result
-    @@readline_result = nil
-    result
-  end
-
   def start(dir, log_to, path_to_select)
     tree = FileTree.new Path.new dir
     view = View.new(tree)
+    if path_to_select
+      Log.info { "Started with #{dir} selected #{path_to_select}" }
+      path_to_select = path_to_select.expand.normalize
+      tree.expand_path(path_to_select)
+      view.select_path(path_to_select)
+    end
+
     fswatch_mbox = start_fswatch()
     config = Config.new
 
@@ -447,6 +509,7 @@ module Tree
         view.render
         Curses.erase
         view.draw
+        Curses.set_title("tcr")
       end
 
       char = LibNcurses.wgetch(LibNcurses.stdscr)
@@ -471,6 +534,11 @@ module Tree
       when 'q'
         Curses.stop
         exit(0)
+      when 'o'
+        changed = view.lines[view.cursor].tree.expand_recursive
+      when 'r'
+        new_name = view.ask(:rename, "Rename #{view.lines[view.cursor].tree.path.basename}> ")
+        changed = view.lines[view.cursor].tree.rename(new_name)
       when LibNcurses::Keys::KEY_PPAGE.value.chr
         changed = view.up(view.lines.size)
       when LibNcurses::Keys::KEY_NPAGE.value.chr
@@ -506,7 +574,8 @@ module Tree
         end
         changed = false
       end
-      changed = changed || tree.handle_changes(fswatch_mbox.take)
+      tree_changed = tree.handle_changes(fswatch_mbox.take)
+      changed = changed || tree_changed
     end
   end
 
@@ -517,7 +586,7 @@ module Tree
     path_to_select = nil
     log_to = nil
 
-    parser.on "-s", "--select", "Open and select this path" do |path|
+    parser.on "-s FILE", "--select=FILE", "Open and select this path" do |path|
       path_to_select = Path.new path
     end
 
