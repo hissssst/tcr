@@ -198,7 +198,8 @@ module Curses
   end
 
   def set_title(title)
-    putp("\x1b]0;#{title}\x07")
+    # putp("\x1b]0;#{title}\x07")
+    :ok
   end
 
   def getmouse
