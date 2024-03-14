@@ -16,6 +16,8 @@ class FileTree
   getter parent : Nil | FileTree
   getter hidden : Bool
 
+  @@filter_hidden = true
+
   def initialize(parent : FileTree, path : Path)
     initialize(path)
     @parent = parent
@@ -27,12 +29,24 @@ class FileTree
     @expanded = false
     @kind = File.directory?(@path) ? :directory : :file
     @parent = nil
-    @hidden = @path.basename[0] == "."
+    @hidden = @path.basename[0]? == "."
   end
 
   def initialize(parent : FileTree, directory : Path)
     initialize(directory)
     @parent = parent
+  end
+
+  def toggle_filter_hidden
+    @@filter_hidden = !@@filter_hidden
+  end
+
+  def reload
+    if @expanded
+      self.load_children
+    else
+      @children.clear
+    end
   end
 
   def handle_changes(changes)
@@ -110,13 +124,36 @@ class FileTree
     end
   end
 
+  def reorder_children
+    @children = @children.sort_by do |child_tree|
+      if child_tree.kind == :directory
+        {-1, child_tree.path.basename}
+      else
+        {1, child_tree.path.basename}
+      end
+    end
+  end
+
+  def load_children
+    children = Dir.new(@path).children
+    children =
+      if @@filter_hidden
+        children.reject { |path| path[0]? == '.' }
+      else
+        children
+      end
+    children = children.map do |path|
+      path = @path / Path.new path
+      FileTree.new(self, path)
+    end
+    @children = children
+    self.reorder_children
+  end
+
   def expand
     if @kind == :directory && !@expanded
       if @children.size == 0
-        Dir.new(@path).each_child do |path|
-          path = @path / Path.new path
-          @children.push FileTree.new(self, path)
-        end
+        self.load_children
       end
 
       @expanded = true
@@ -385,7 +422,7 @@ class View
       @yoffset = Math.min(found_at, steps - @ymax)
       @cursor = Math.max(0, found_at - @yoffset)
     else
-      @cursor = found_at
+      @cursor = Math.max(0, found_at)
     end
   end
 
@@ -396,6 +433,9 @@ class View
     else
       line
     end
+  end
+
+  def add_path
   end
 
   def draw
@@ -539,6 +579,13 @@ module Tree
       when 'r'
         new_name = view.ask(:rename, "Rename #{view.lines[view.cursor].tree.path.basename}> ")
         changed = view.lines[view.cursor].tree.rename(new_name)
+      when 'i'
+        tree.toggle_filter_hidden
+        tree.reload
+        changed = true
+      when 'a'
+        view.add_path
+        changed = true
       when LibNcurses::Keys::KEY_PPAGE.value.chr
         changed = view.up(view.lines.size)
       when LibNcurses::Keys::KEY_NPAGE.value.chr

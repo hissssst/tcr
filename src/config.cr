@@ -1,9 +1,11 @@
 require "ini"
 require "log"
+require "./curses"
 
 class Config
   getter bindings
   getter config
+  getter colors
 
   def initialize(path = default_path)
     if File.exists?(path)

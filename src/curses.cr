@@ -1,3 +1,5 @@
+# Ncurses wide bindings
+
 @[Extern]
 record MouseEvent, id : Int8, x : LibC::Int, y : LibC::Int, z : LibC::Int, bstate : UInt32
 
